@@ -2,7 +2,9 @@ import os
 import grpc
 import codecs
 import hashlib
-from flask import Flask, request, Response
+import json
+
+from flask import Flask, request, jsonify, Response
 from typing import Optional
 
 # LND protobufs
@@ -31,12 +33,12 @@ PRICE_SATS = 30
 INVOICE_EXPIRY = 3600  # 1 hour
 
 # ────────────────────────────────────────────────
-# APP
+# APP & GLOBALS
 # ────────────────────────────────────────────────
 
 app = Flask(__name__)
 
-# Keep one persistent stub
+# Persistent LND stub (lazy initialized)
 _lnd_stub: Optional[lnrpc.LightningStub] = None
 
 
@@ -54,7 +56,7 @@ def get_lnd_stub() -> lnrpc.LightningStub:
     with open(MACAROON_PATH, "rb") as f:
         macaroon = codecs.encode(f.read(), "hex").decode()
 
-    # TLS cert
+    # Read TLS cert
     with open(TLS_CERT_PATH, "rb") as f:
         cert = f.read()
 
@@ -82,15 +84,15 @@ def verify_l402_payment(auth_header: str) -> bool:
         Authorization: L402 <preimage>
         Authorization: L402 macaroon:preimage
     """
-
-    if not auth_header.startswith("L402"):
+    if not auth_header or not auth_header.startswith("L402 "):
         return False
 
     try:
-        token = auth_header.replace("L402", "").strip()
+        token = auth_header.replace("L402 ", "").strip()
 
         if ":" in token:
-            preimage_hex = token.split(":")[-1]
+            # macaroon:preimage format → take the part after last :
+            preimage_hex = token.split(":", 1)[-1]
         else:
             preimage_hex = token
 
@@ -101,7 +103,7 @@ def verify_l402_payment(auth_header: str) -> bool:
         payment_hash = ln.PaymentHash(r_hash=r_hash)
         invoice = stub.LookupInvoice(payment_hash)
 
-        # 1 = SETTLED (most reliable cross-version check)
+        # state == 1 → SETTLED
         return invoice.state == 1
 
     except Exception as e:
@@ -131,11 +133,8 @@ def create_invoice() -> str:
 # MAIN ENDPOINT
 # ────────────────────────────────────────────────
 
-from flask import jsonify
-
 @app.route("/omega-pruner", methods=["GET"])
 def omega_pruner():
-
     address = request.args.get("address")
     if not address:
         return jsonify({
@@ -147,26 +146,34 @@ def omega_pruner():
     auth_header = request.headers.get("Authorization", "")
 
     # ───────────────────────────────
-    # 1) If payment is valid → return result
+    # 1) Valid payment → return analysis result
     # ───────────────────────────────
     if verify_l402_payment(auth_header):
+        try:
+            # Replace with your actual analysis function
+            from engine.analyze import analyze_address
 
-        # (placeholder logic for now)
-        result = {
-            "status": "success",
-            "address": address,
-            "privacy_score": 8.2,
-            "fee_savings_estimate": 450,
-            "dust_detected": False,
-            "risk_level": "low",
-            "pruned_utxos": [],
-            "psbt": "cHNidP8BAJoCAAAAA..."
-        }
+            data = analyze_address(address)
 
-        return jsonify(result), 200
+            return Response(
+                json.dumps(data, indent=2),
+                content_type="application/json"
+            )
+
+        except ImportError:
+            return jsonify({
+                "status": "error",
+                "message": "Analysis module not found"
+            }), 500
+        except Exception as e:
+            print("Analysis error:", e)
+            return jsonify({
+                "status": "error",
+                "message": "Error analyzing address"
+            }), 500
 
     # ───────────────────────────────
-    # 2) Otherwise → return invoice (JSON, not text)
+    # 2) No/invalid payment → return invoice
     # ───────────────────────────────
     try:
         payment_request = create_invoice()
