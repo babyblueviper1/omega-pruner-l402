@@ -7,6 +7,21 @@ you pay a few sats → the request unlocks instantly.
 
 ---
 
+## Try it in 10 seconds
+
+Start the server locally:
+
+python l402_omega_pruner.py
+
+Then open:
+
+http://127.0.0.1:8081/omega-pruner?address=bc1qexample
+
+You will receive a Lightning invoice (10–30 sats).  
+Pay it → refresh → the address analysis unlocks.
+
+---
+
 ## What this does
 
 **Ωmega Pruner** analyzes a Bitcoin address and returns:
